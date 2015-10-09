@@ -23,3 +23,12 @@ dependencies {
     testCompile 'junit:junit:4.12'
     compile 'com.android.support:appcompat-v7:23.0.1'
 }
+
+publish {
+    user0rg = 'burkdog'
+    groupId = 'kr.ssungwoo.utils'
+    artifactId = 'utils'
+    publishVersion = '0.1.1'
+    desc = 'utils package'
+    website = 'https://github.com/ksu3101/Utils'
+}
