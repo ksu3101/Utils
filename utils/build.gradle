@@ -1,8 +1,10 @@
 apply plugin: 'com.android.library'
+apply plugin: 'com.novoda.bintray-release'
 
 android {
     compileSdkVersion 23
     buildToolsVersion "22.0.1"
+    compileOptions.encoding = 'UTF-8'
 
     defaultConfig {
         minSdkVersion 11
@@ -25,7 +27,7 @@ dependencies {
 }
 
 publish {
-    user0rg = 'burkdog'
+    userOrg = 'burkdog'
     groupId = 'kr.ssungwoo.utils'
     artifactId = 'utils'
     publishVersion = '0.1.1'
