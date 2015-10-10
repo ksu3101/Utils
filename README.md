@@ -1,5 +1,4 @@
 # Utils
-Utils package
 
 ## 설명
 개인적으로 사용하기 위해 만든 Util메소드 패키지 입니다. 
@@ -18,7 +17,7 @@ dependencies {
 
 Utils static class의 static메소드들을 상황에 맞추어 가져다가 쓰면 됩니다. 
 
-## 메소드 목록
+## Utils 클래스 메소드 목록
 ```
 String getCalendar(Calendar)                    : Calendar의 시간(yyyy-MM-dd'T'HH:mm:ssZ/ISO8601 규격)을 얻음
 String getNow()                                 : 현재 시간(yyyy-MM-dd'T'HH:mm:ssZ/ISO8601 규격)을 얻음. 
@@ -83,4 +82,20 @@ void hideSoftKeyboard(Activity)                 : 포커싱 된 뷰로 인해 �
 void hideSoftKeyboard(Context, View...)         : 포커싱 된 뷰로 인해 등장한 소프트 키보드를 감 춘다. 
 void showSoftKeyboard(Context, View)            : view에 포커스를 요청하고 키보드를 등장 하게 한다. 
 ```
+
+## SWpreferences 클래스 메소드 목록
+```
+<T> boolean preferenceSave(Context, String, T)  : String 키를 가진 데이터 T를 저장 한다. (Integer, Long, Boolean, Float, String)
+String preferencesLoad_String(Context, String)  : 저장된 값 중 문자열을 불러온다. 
+int preferencesLoad_Int(Context, String)        : 저장된 값 중 Integer를 불러 온다. 
+long preferencesLoad_Long(Context, String)      
+float preferencesLoad_Float(Context, String)
+boolean preferencesLoad_Boolean(Context, String)
+boolean preferencesLoad_Boolean(Context, String, boolean defValue)
+```
+
+## SecurePreferences 클래스 메소드 목록
+[Visit sveinung github](https://github.com/sveinungkb/encrypted-userprefs)
+
+
 
