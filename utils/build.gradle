@@ -30,7 +30,7 @@ publish {
     userOrg = 'burkdog'
     groupId = 'kr.ssungwoo.utils'
     artifactId = 'utils'
-    publishVersion = '0.1.1'
+    publishVersion = '0.1.2'
     desc = 'utils package'
     website = 'https://github.com/ksu3101/Utils'
 }
