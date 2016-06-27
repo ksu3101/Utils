@@ -4,10 +4,15 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.content.ContentValues;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.content.res.Resources;
+import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.graphics.Bitmap;
@@ -16,6 +21,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
+import android.graphics.Matrix;
 import android.graphics.Point;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
@@ -25,58 +31,194 @@ import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.TransitionDrawable;
+import android.location.LocationManager;
+import android.media.ExifInterface;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.MediaStore;
+import android.support.annotation.ColorInt;
+import android.support.annotation.DrawableRes;
+import android.support.annotation.IdRes;
+import android.support.annotation.IntRange;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.v4.view.ViewConfigurationCompat;
 import android.telephony.TelephonyManager;
 import android.text.Html;
+import android.text.Layout;
+import android.text.Selection;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
+import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Patterns;
 import android.util.TypedValue;
 import android.view.Display;
-import android.view.Gravity;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
 import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.AbsListView;
+import android.widget.AbsSpinner;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.text.DecimalFormat;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.GregorianCalendar;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Utility class
  *
- * @author SungWoo Kang
+ * @author KangSung-Woo
  * @since 2015/08/25
  */
 public class Utils {
-  private static String  TAG   = Utils.class.getSimpleName();
-  public static  boolean DEBUG = false;
+  private static String TAG = Utils.class.getSimpleName();
 
+  /**
+   * 어떠한 시간과 현재의 시간을 비교해서 변화된 시간의 값에 따른 문자열을 얻는다.
+   * 게시물의 리플, 알림의 내 소식에서 사용 된다.
+   * <p/>
+   * <li>1초 ~ 59초 이전 : 1초 전 ~ 59초 전 (초 단위)</li>
+   * <li>1분 ~ 59분 이전 : 1분 전 ~ 59분 전 (분 단위)</li>
+   * <li>1시간 ~ 23시간 59분전 : 1시간 전 ~ 23시간 전 (시간 단위)</li>
+   * <li>24시간 이전 : yyyy.MM.dd (년.월.일)</li>
+   * <p/>
+   * (14/04/22 ksw : 현재 서버에서 처리 중)
+   *
+   * @param cal 시간 비교 대상의 Calendar object.
+   * @return date string or EmptyString
+   */
+  @Deprecated
+  public static String getDiffDateString(Calendar cal) {
+    if (cal != null) {
+      Calendar now = GregorianCalendar.getInstance();
+
+      final long nowMillis = now.getTimeInMillis();
+      final long curMillis = cal.getTimeInMillis();
+
+      final long diff = nowMillis - curMillis;
+
+      if (diff <= 0) {
+        // 서버 시간과 로컬의 시간이 다른 경우 -> 그냥 방금 전으로 판단
+        return "지금";
+      }
+      else {
+        final long diffDays = diff / (24 * 60 * 60 * 1000);
+        if (diffDays >= 1) {
+          //Log.d(TAG, "// getDiffDateString() // diffDays = " + diffDays);
+
+          // yyyy.mm.dd
+          SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy.MM.dd", Locale.getDefault());
+          final String output = simpleDateFormat.format(cal.getTimeInMillis());
+          //Log.d(TAG, "// getDiffDateString() // output string = " + (output != null ? output : "NULL"));
+          return output;
+        }
+        else {
+          final long diffHours = diff / (60 * 60 * 1000) % 24;
+          if (diffHours >= 1) {
+            //Log.d(TAG, "// getDiffDateString() // diffHours = " + diffHours);
+            return String.valueOf(diffHours + "시간 전");
+          }
+          else {
+            final long diffMins = diff / (60 * 1000) % 60;
+            if (diffMins >= 1) {
+              return String.valueOf(diffMins + "분 전");
+            }
+            else {
+              final long diffSec = diff / 1000 % 60;
+              return String.valueOf(diffSec + "초 전");
+            }
+          }
+        }
+      }
+    }
+    Log.w(TAG, "ERROR");
+    return "";
+  }
+
+  /**
+   * 어떠한 시간과 현재 시간을 비교하여, 하루가 지났는지를 판단해서 날짜를 다시 문자열로
+   * 편집하여 반환한다.
+   *
+   * @param originalDate 비교할 시간 대상 ("yyyy-MM-dd hh:mm:ss")
+   * @return 변환된 문자열 혹은 원본 문자열
+   */
+
+  public static String getDiffDayDateString(String originalDate) {
+    if (originalDate != null) {
+      Calendar cal = Calendar.getInstance();
+      SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss", Locale.getDefault());
+      try {
+        cal.setTime(sdf.parse(originalDate));
+      } catch (ParseException pe) {
+        Log.e(TAG, pe.getMessage());
+        return originalDate;
+      }
+
+      Calendar now = GregorianCalendar.getInstance();
+      final int calDay = cal.get(Calendar.DAY_OF_YEAR);
+      final int nowDay = now.get(Calendar.DAY_OF_YEAR);
+      int dayDif = Math.abs(nowDay - calDay);
+      if (dayDif >= 1) {
+        // 하루 이상 지난 경우 / yyyy-mm-dd
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+        return String.valueOf(format.format(cal.getTime()));
+      }
+      else {
+        // 오늘 업로드한 게시물 일 경우 / yyyy-mm-dd a hh:mm
+        // -> 2016/01/18 수정 (24시간제로 바꿈)
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
+        return String.valueOf(format.format(cal.getTime()));
+      }
+    }
+    return "";
+  }
 
   /**
    * Calendar를 ISO8601 규격에 맞춘 시간 문자열로 얻는다.
@@ -91,12 +233,77 @@ public class Utils {
   }
 
   /**
+   * 날짜 및 시간정보를 dateFormat에 맞추어서 얻는다.
+   *
+   * @param cal        날짜 및 시간의 Calendar 객체
+   * @param dateFormat SimpleDateFormat을 참고 할 것
+   * @return 시간 문자열
+   */
+  public static String getNow(Calendar cal, String dateFormat) {
+    Date date = cal.getTime();
+    return new SimpleDateFormat(dateFormat, Locale.getDefault()).format(date);
+  }
+
+  /**
+   * 현재의 날짜 정보를 'yyyy. MM. dd.'형태로 얻는다.
+   *
+   * @return 'yyyy. MM. dd.'형태의 시간 문자열
+   */
+  public static String getNowDate() {
+    return getNow(GregorianCalendar.getInstance(), "yyyy. MM. dd.");
+  }
+
+  /**
    * 현재 시간의 문자열을 얻는다.
    *
    * @return 현재 시간 문자열
    */
   public static String getNow() {
     return getCalendar(GregorianCalendar.getInstance());
+  }
+
+  /**
+   * @param dateStr
+   * @param format
+   * @return
+   */
+  public static String getDateString(String dateStr, String format) {
+    if (!TextUtils.isEmpty(dateStr) && !TextUtils.isEmpty(format)) {
+      Calendar cal = Calendar.getInstance();
+      SimpleDateFormat sdf = new SimpleDateFormat(format, Locale.getDefault());
+      try {
+        cal.setTime(sdf.parse(dateStr));
+        //return new SimpleDateFormat(format, Locale.getDefault()).format(dateStr);
+        return String.valueOf(sdf.format(cal.getTime()));
+
+      } catch (ParseException pe) {
+        Log.e(TAG, pe.getMessage());
+        return dateStr;
+      }
+
+    }
+    return dateStr;
+  }
+
+  /**
+   * dateStr 문자열이 date format형인지 여부를 판단 한다.
+   *
+   * @param dateStr 날짜 문자열
+   * @param format  SimpleDateFormat의 format 형태 문자열
+   * @return true or false
+   */
+  public static boolean validDateFormat(String dateStr, String format) {
+    if (!TextUtils.isEmpty(dateStr) && !TextUtils.isEmpty(format)) {
+      SimpleDateFormat dateFormat = new SimpleDateFormat(format, Locale.getDefault());
+      try {
+        dateFormat.parse(dateStr);
+
+      } catch (ParseException pe) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -111,7 +318,7 @@ public class Utils {
     try {
       appInfo = mgr.getApplicationInfo(context.getPackageName(), PackageManager.SIGNATURE_MATCH);
     } catch (PackageManager.NameNotFoundException nnfe) {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// " + nnfe.getMessage());
+      Log.e(TAG, nnfe.getMessage());
     }
     return (String) (appInfo != null ? mgr.getApplicationLabel(appInfo) : "UNKNOWN");
   }
@@ -129,7 +336,7 @@ public class Utils {
       checkDb = SQLiteDatabase.openDatabase("/data/data/" + packageName + "/databases/" + dbName, null, SQLiteDatabase.OPEN_READONLY);
       checkDb.close();
     } catch (SQLiteException se) {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// " + se.getMessage());
+      Log.e(TAG, se.getMessage());
     }
     boolean isDBPresent = checkDb != null ? true : false;
     return isDBPresent;
@@ -142,10 +349,7 @@ public class Utils {
    */
   public static boolean isSDCardMounted() {
     String status = Environment.getExternalStorageState();
-    if (status != null && status.equals(Environment.MEDIA_MOUNTED)) {
-      return true;
-    }
-    return false;
+    return status != null && status.equals(Environment.MEDIA_MOUNTED);
   }
 
   /**
@@ -154,7 +358,7 @@ public class Utils {
    * @param context Context
    * @return 전화번호 문자열.
    */
-  public static String getPhoneNumber(Context context) {
+  public static String getPhoneNumber(@NonNull Context context) {
     TelephonyManager tMgr = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
     return tMgr.getLine1Number();
   }
@@ -166,23 +370,72 @@ public class Utils {
    * @return TYPE_MOBILE, TYPE_WIFI or -1
    * @see ConnectivityManager
    */
-  public static int getNetworkConnectionType(Context context) {
+  public static int getNetworkConnectionType(@NonNull Context context) {
     ConnectivityManager mgr = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-    if (mgr != null && mgr.getNetworkInfo(ConnectivityManager.TYPE_MOBILE)
-                          .isConnected()) {
-      if (mgr.getNetworkInfo(ConnectivityManager.TYPE_MOBILE)
-             .isConnected()) {
-        return ConnectivityManager.TYPE_MOBILE;
-      }
-      else if (mgr.getNetworkInfo(ConnectivityManager.TYPE_WIFI)
-                  .isConnected()) {
-        return ConnectivityManager.TYPE_WIFI;
-      }
-      else {
-        return -1;
-      }
+
+    if (mgr.getNetworkInfo(ConnectivityManager.TYPE_MOBILE).isConnected()) {
+      return ConnectivityManager.TYPE_MOBILE;
     }
-    return -1;
+    else if (mgr.getNetworkInfo(ConnectivityManager.TYPE_WIFI).isConnected()) {
+      return ConnectivityManager.TYPE_WIFI;
+    }
+    else {
+      return -1;
+    }
+  }
+
+  /**
+   * original 문자열에서 startIndex 에 위치한 글자를 target만큼(길이) 삭제 하고 replacement 문자열로
+   * 치환 한다.
+   *
+   * @param original    원본 문자열
+   * @param startIndex  replace를 시작할 위치 index
+   * @param endWidth    원본 문자열의 길이
+   * @param replacement 교체 할 문자열
+   * @return 교체된 문자열. 오류시 원본 문자열을 반환
+   */
+  public static String replacOnIndex(String original, int startIndex, int endWidth, String replacement) {
+    if (original == null) throw new NullPointerException("original 문자열은 null이 될 수 없습니다. ");
+    if (replacement == null) throw new NullPointerException("replacement 문자열은 null이 될 수 없습니다.");
+
+    StringBuilder b = new StringBuilder(original);
+    try {
+      b.delete(startIndex, endWidth);
+      b.insert(startIndex, replacement);
+
+    } catch (IndexOutOfBoundsException e) {
+      Log.e(TAG, e.getMessage());
+      return original;
+    }
+
+    return b.toString();
+  }
+
+  /**
+   * 문자열 str이 URL형식을 갖추고 있는지 여부를 확인 한다.
+   *
+   * @param str url 형식을 체크할 문자열
+   * @return true일 경우 url 형식
+   */
+  public static boolean isUrlString(String str) {
+    if (!TextUtils.isEmpty(str)) {
+      return Pattern.compile(ConstantParams.REGEX_VALIDATE_URL).matcher(str).matches();
+      //return Patterns.WEB_URL.matcher(str).matches();
+    }
+    return false;
+  }
+
+  /**
+   * 문자열 str이 이미지 경로 인지 여부를 확인 한다.
+   *
+   * @param str 이미지 경로인지 체크할 문자열
+   * @return true일 경우 이미지 경로
+   */
+  public static boolean isImagePath(String str) {
+    if (!TextUtils.isEmpty(str)) {
+      return (str.endsWith(".png") || str.endsWith(".jpg") || str.endsWith(".jpeg") || str.endsWith(".webp") || str.endsWith(".gif"));
+    }
+    return false;
   }
 
   /**
@@ -211,12 +464,88 @@ public class Utils {
         Double.parseDouble(str);
         return true;
       } catch (NumberFormatException nfe) {
-        if (DEBUG) {
-          Log.e(TAG, nfe.getMessage());
-        }
+        Log.e(TAG, nfe.getMessage());
       }
     }
     return false;
+  }
+
+  /**
+   * 문자열 str에 특수문자가 존재하는지 여부를 판단 한다.
+   *
+   * @param str 특수문자 존재 여부를 확인할 문자열.
+   * @return true일 경우 특수문자가 존재. false일 경우 없음.
+   */
+  public static boolean hasSpecialCharacter(String str) {
+    final String strU = str.toUpperCase();
+    Pattern p = Pattern.compile(".*[^ㄱ-ㅎㅏ-ㅣ가-힣-a-zA-Z0-9].*");
+    Matcher m = p.matcher(strU);
+    return m.matches();
+  }
+
+  /**
+   * 특정한 문자열 집합에서 정규식으로 표현된 문자열이 존재하는지 확인 하고 난 뒤
+   * 해당하는 문자열들의 목록을 반환한다.
+   *
+   * @param regEx  찾을 대상의 정규 표현식
+   * @param target 찾을 대상 문자열
+   * @return 찾은 문자열 목록. 없을경우 비어있는 목록.
+   */
+  public static ArrayList<String> findPatternMatch(String regEx, String target) {
+    ArrayList<String> result = new ArrayList<>();
+    if (regEx != null && !TextUtils.isEmpty(target)) {
+      Matcher m = Pattern.compile(regEx)
+                         .matcher(target);
+      while (m.find()) {
+        result.add(m.group());
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 특정한 문자열 집합에서 정규식으로 표현된 문자열이 존재하는지 확인 하고 난 뒤
+   * 찾은 목록 Matcher object를 반환한다.
+   *
+   * @param regEx  찾을 대상의 정규 표현식
+   * @param target 찾을 대상 문자열
+   * @return Matcher object. 없을 경우 비어있는 목록.
+   */
+  public static Matcher findPatternMatcher(String regEx, String target) {
+    Matcher m = null;
+    if (regEx != null && !TextUtils.isEmpty(target)) {
+      m = Pattern.compile(regEx)
+                 .matcher(target);
+    }
+    return m;
+  }
+
+  public static Matcher findPatternMatcherUnicodes(String regEx, String target) {
+    Matcher m = null;
+    if (regEx != null && !TextUtils.isEmpty(target)) {
+      m = Pattern.compile(regEx, Pattern.UNICODE_CASE)
+                 .matcher(target);
+    }
+    return m;
+  }
+
+  /**
+   * 특정 문자열집합 str에서 문자 c의 갯수를 반환한다. 없을 경우 0을 반환 한다.
+   *
+   * @param c   카운팅 할 찾을 문자
+   * @param str 대상 문자열 집합
+   * @return 찾은 갯수
+   */
+  public static int getCountCharactorInString(char c, String str) {
+    int result = 0;
+    if (!TextUtils.isEmpty(str)) {
+      for (int i = 0; i < str.length(); i++) {
+        if (str.charAt(i) == c) {
+          result++;
+        }
+      }
+    }
+    return result;
   }
 
   /**
@@ -239,15 +568,15 @@ public class Utils {
    * 앱의 버전 네이밍을 얻는다. (예를 들어 1.0)
    *
    * @param context Context
-   * @return null or Version name string.
+   * @return empty or Version name string.
    */
   public static String getApplicationVersionNumber(Context context) {
-    String versionNumber = null;
+    String versionNumber = "";
     try {
       versionNumber = context.getPackageManager()
                              .getPackageInfo(context.getPackageName(), 0).versionName;
     } catch (PackageManager.NameNotFoundException nne) {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// " + nne.getMessage());
+      Log.e(TAG, nne.getMessage());
     }
     return versionNumber;
   }
@@ -264,7 +593,7 @@ public class Utils {
       versionCode = context.getPackageManager()
                            .getPackageInfo(context.getPackageName(), 0).versionCode;
     } catch (PackageManager.NameNotFoundException nne) {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// " + nne.getMessage());
+      Log.e(TAG, nne.getMessage());
     }
     return versionCode;
   }
@@ -285,7 +614,7 @@ public class Utils {
    * @param serviceNameTag 실행중 여부를 확인 할 서비스의 태그 문자열.
    * @return true or false
    */
-  public static boolean isServiceRunning(Context context, String serviceNameTag) {
+  public static boolean isServiceRunning(@NonNull Context context, String serviceNameTag) {
     if (serviceNameTag != null) {
       ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
       for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
@@ -296,7 +625,7 @@ public class Utils {
       }
     }
     else {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// Service is NULL...");
+      Log.e(TAG, "Service is NULL...");
     }
     return false;
   }
@@ -309,16 +638,16 @@ public class Utils {
    * @param highlightText 하이리이팅 할 텍스트.
    * @param original      원본 텍스트.
    */
-  public static void setHighlightText(TextView textView, int color, String highlightText, String original) {
+  public static void setHighlightText(TextView textView, @ColorInt int color, String highlightText, String original) {
     if (highlightText != null && textView != null) {
       String hexColor = String.format("#%06X", (0xFFFFFF & color));
       if (!TextUtils.isEmpty(hexColor)) {
-        if (DEBUG) Log.d(TAG, "//// DEBUG //// hexColor is " + hexColor);
+        Log.d(TAG, "hexColor is " + hexColor);
         String result = original.replaceAll(highlightText, "<font color='" + hexColor + "'>" + highlightText + "</font>");
         textView.setText(Html.fromHtml(result));
       }
       else {
-        if (DEBUG) Log.w(TAG, "//// WARNING //// hexColor is Empty.");
+        Log.w(TAG, "hexColor is Empty.");
       }
     }
   }
@@ -330,7 +659,7 @@ public class Utils {
    * @param highlightText 하이라이팅 할 텍스트.
    * @param original      원본 텍스트.
    */
-  public static void setHighlightText(TextView textView, String highlightText, String original) {
+  public static void setHighlightText(TextView textView, String highlightText, @NonNull String original) {
     if (highlightText != null && textView != null) {
       String result = original.replaceAll(highlightText, "<font color='red'>" + highlightText + "</font>");
       textView.setText(Html.fromHtml(result));
@@ -351,7 +680,37 @@ public class Utils {
       return sb;
     }
     else {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// String is null.. ");
+      Log.e(TAG, "String is null.. ");
+    }
+    return null;
+  }
+
+  /**
+   * 입력한 'original'변수 문자열에서 'findWord'변수로 받은 단어를 찾아서 설정한 color의 span을 설정 해 준다.
+   *
+   * @param original 원본 텍스트
+   * @param findWord 찾을 단어 문자열
+   * @param color    설정할 컬러 값
+   * @return span이 설정된 객체나 혹은 null
+   */
+  public static SpannableStringBuilder findTextAndSetColor(String original, String findWord, @ColorInt int color) {
+    if (!TextUtils.isEmpty(original)) {
+      if (!TextUtils.isEmpty(findWord)) {
+        final Pattern p = Pattern.compile(findWord);
+        final Matcher m = p.matcher(original);
+
+        SpannableStringBuilder sb = new SpannableStringBuilder(original);
+        //ForegroundColorSpan colorSpan = new ForegroundColorSpan(color);
+        //SpannableString ss = new SpannableString(original);
+
+        while (m.find()) {
+          sb.setSpan(
+              new ForegroundColorSpan(color), m.start(), m.end(), Spanned.SPAN_INCLUSIVE_INCLUSIVE
+          );
+          //sb.append(ss);
+        }
+        return sb;
+      }
     }
     return null;
   }
@@ -417,50 +776,13 @@ public class Utils {
   }
 
   /**
-   * 간단한 토스트 메시지를 보여 준다.
-   *
-   * @param context Context object.
-   * @param message 토스트를 통해서 보여줄 메시지.
-   */
-  public static void showToast(Context context, String message) {
-    Toast.makeText(context, message, Toast.LENGTH_SHORT)
-         .show();
-  }
-
-  /**
-   * 간단한 토스트 메시지를 화면의 특정 위치에서 보여 준다.
-   *
-   * @param context      Context object.
-   * @param message      토스트를 통해서 보여줄 메시지
-   * @param toastGravity 토스트의 위치.
-   * @see android.view.Gravity
-   */
-  public static void showToast(Context context, String message, int toastGravity) {
-    Toast toast = Toast.makeText(context, message, Toast.LENGTH_SHORT);
-    toast.setGravity(toastGravity, 0, 0);
-    toast.show();
-  }
-
-  /**
-   * 간단한 토스트 메세지를 화면의 중간에 보여 준다.
-   *
-   * @param context Context object.
-   * @param message 토르스틀 통해서 보여줄 메시지.
-   */
-  public static void showToastCenter(Context context, String message) {
-    Toast toast = Toast.makeText(context, message, Toast.LENGTH_SHORT);
-    toast.setGravity(Gravity.CENTER_VERTICAL | Gravity.CENTER_HORIZONTAL, 0, 0);
-    toast.show();
-  }
-
-  /**
    * Pixel 단위 숫자를 DPI단위 Float형태의 숫자로 변환한다.
    *
    * @param res   Resources.
    * @param pixel 변환대상 Pixel 단위 숫자.
    * @return Float형태의 DPI.
    */
-  public static float convertPixelToDpi(Resources res, int pixel) {
+  public static float convertPixelToDpi(@NonNull Resources res, int pixel) {
     return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_PX, pixel, res.getDisplayMetrics());
   }
 
@@ -471,7 +793,7 @@ public class Utils {
    * @param dpi 변환대상 DPI단위의 숫자.
    * @return Float형태의 pixel 숫자.
    */
-  public static float convertDpiToPixel(Resources res, int dpi) {
+  public static float convertDpiToPixel(@NonNull Resources res, int dpi) {
     return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dpi, res.getDisplayMetrics());
   }
 
@@ -482,7 +804,7 @@ public class Utils {
    * @param pixel 변환대상 Pixel 단위 숫자.
    * @return Float형태의 DPI.
    */
-  public static float convertPixelToDpi(Resources res, float pixel) {
+  public static float convertPixelToDpi(@NonNull Resources res, float pixel) {
     return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_PX, pixel, res.getDisplayMetrics());
   }
 
@@ -493,7 +815,7 @@ public class Utils {
    * @param dpi 변환대상 DPI단위의 숫자.
    * @return Float형태의 pixel 숫자.
    */
-  public static float convertDpiToPixel(Resources res, float dpi) {
+  public static float convertDpiToPixel(@NonNull Resources res, float dpi) {
     return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dpi, res.getDisplayMetrics());
   }
 
@@ -506,7 +828,7 @@ public class Utils {
    * @param layer2 after Drawable.
    * @return {@link TransitionDrawable}
    */
-  public static TransitionDrawable createTransitionDrawable(Drawable layer1, Drawable layer2) {
+  public static TransitionDrawable createTransitionDrawable(@NonNull Drawable layer1, @NonNull Drawable layer2) {
     TransitionDrawable td = new TransitionDrawable(new Drawable[]{layer1, layer2});
     td.setCrossFadeEnabled(true);
     return td;
@@ -521,16 +843,16 @@ public class Utils {
    * @param layerResId2 after Drawable Resource ID.
    * @return {@link TransitionDrawable}
    */
-  public static TransitionDrawable createTransitionDrawable(Resources res,
-                                                            int layerResId1,
-                                                            int layerResId2) {
-    if (res != null) {
-      TransitionDrawable td = new TransitionDrawable(new Drawable[]{res.getDrawable(layerResId1),
-          res.getDrawable(layerResId2)});
-      td.setCrossFadeEnabled(true);
-      return td;
-    }
-    return null;
+  public static TransitionDrawable createTransitionDrawable(@NonNull Resources res,
+                                                            @DrawableRes int layerResId1,
+                                                            @DrawableRes int layerResId2) {
+    TransitionDrawable td = new TransitionDrawable(
+        new Drawable[]{
+            res.getDrawable(layerResId1),
+            res.getDrawable(layerResId2)
+        });
+    td.setCrossFadeEnabled(true);
+    return td;
   }
 
   /**
@@ -599,13 +921,13 @@ public class Utils {
    * @return PorterDuffColorFilter instance.
    * @see PorterDuffColorFilter
    */
-  public static PorterDuffColorFilter applyBrightness(int value) {
+  public static PorterDuffColorFilter applyBrightness(@IntRange(from = -100, to = 100) int value) {
     if (value > 0) {
-      int target = (int) value * 255 / 100;
+      int target = value * 255 / 100;
       return new PorterDuffColorFilter(Color.argb(target, 255, 255, 255), PorterDuff.Mode.SRC_OVER);
     }
     else {
-      int target = (int) (value * -1) * 255 / 100;
+      int target = value * -1 * 255 / 100;
       return new PorterDuffColorFilter(Color.argb(target, 0, 0, 0), PorterDuff.Mode.SRC_ATOP);
     }
   }
@@ -614,11 +936,11 @@ public class Utils {
    * 이미지의 밝기를 조정 할 수 있는 Color Matrix Filter를 생성한다.
    * 사용법 : imageView.setColorFilter(brightIt(100));
    *
-   * @param value ?
+   * @param value Dark -100 ~ 100 Light, brightness value
    * @return ColorMatrixColorFilter
    * @see ColorMatrixColorFilter
    */
-  public static ColorMatrixColorFilter applyBrightnessByMatrixColorFilter(int value) {
+  public static ColorMatrixColorFilter applyBrightnessByMatrixColorFilter(@IntRange(from = -100, to = 100) int value) {
     ColorMatrix cMat = new ColorMatrix();
     cMat.set(new float[]{
         1, 0, 0, 0, value,
@@ -628,8 +950,7 @@ public class Utils {
     });
     ColorMatrix cMatSet = new ColorMatrix();
     cMatSet.set(cMat);
-    ColorMatrixColorFilter filter = new ColorMatrixColorFilter(cMatSet);
-    return filter;
+    return new ColorMatrixColorFilter(cMatSet);
   }
 
   /**
@@ -639,11 +960,7 @@ public class Utils {
    * @param value 밝기 조정 값. (-255 ~ 255 Integer)
    * @return 밝기값이 적용된 Bitmap 이미지.
    */
-  public static Bitmap setImageBrightness(Bitmap src, int value) {
-    if (value < -255 && value > 255) {
-      return null;
-    }
-
+  public static Bitmap setImageBrightness(@NonNull Bitmap src, @IntRange(from = 0, to = 255) int value) {
     // image size
     int width = src.getWidth();
     int height = src.getHeight();
@@ -737,7 +1054,7 @@ public class Utils {
    * @param img ARGB8888으로 전환할 원본 이미지.
    * @return ARGB8888으로 전환된 비트맵 객체.
    */
-  public static Bitmap convertRGB565toARGB8888(Bitmap img) {
+  public static Bitmap convertRGB565toARGB8888(@NonNull Bitmap img) {
     int numPixels = img.getWidth() * img.getHeight();
     int[] pixels = new int[numPixels];
 
@@ -750,6 +1067,63 @@ public class Utils {
     //Set RGB pixels.
     result.setPixels(pixels, 0, result.getWidth(), 0, 0, result.getWidth(), result.getHeight());
     return result;
+  }
+
+  /**
+   * @param view
+   * @param skipGarbageCollection
+   */
+  public static void unbindDrawables(@NonNull View view, boolean skipGarbageCollection) {
+    if (view.getBackground() != null) {
+      view.getBackground()
+          .setCallback(null);
+    }
+    if (view instanceof ViewGroup) {
+      for (int i = 0; i < ((ViewGroup) view).getChildCount(); i++) {
+        unbindDrawables(((ViewGroup) view).getChildAt(i), true);
+      }
+      if (!(view instanceof AbsSpinner) && !(view instanceof AbsListView)) {
+        ((ViewGroup) view).removeAllViews();
+      }
+    }
+
+    if (!skipGarbageCollection) System.gc();
+  }
+
+  /**
+   * get image Uri from imageview drawable or exist cached file.
+   *
+   * @param iv ImageView instance
+   * @return Uri instance
+   */
+  public static Uri getImageFromImageView(Context context, ImageView iv) {
+    if (context == null) {
+      throw new NullPointerException("Context is null..");
+    }
+    Uri imgUri = null;
+    if (iv != null) {
+      // extract bitmap from imageview drawable.
+      Drawable drawable = iv.getDrawable();
+      Bitmap bmp = null;
+      if (drawable instanceof BitmapDrawable) {
+        bmp = ((BitmapDrawable) drawable).getBitmap();
+      }
+      else {
+        return null;
+      }
+      // store image to default external storage directory.
+      try {
+        File f = new File(context.getFilesDir(), "share_image_" + System.currentTimeMillis() + ".png");
+        FileOutputStream fos = new FileOutputStream(f);
+        bmp.compress(Bitmap.CompressFormat.JPEG, 100, fos);
+        fos.close();
+        Log.d(TAG, "// SHARE // saved temporary image file = " + f.getAbsolutePath());
+        imgUri = Uri.fromFile(f);
+      } catch (IOException ioe) {
+        Log.e(TAG, ioe.getMessage());
+      }
+    }
+    return imgUri;
   }
 
   /**
@@ -767,7 +1141,7 @@ public class Utils {
           if (bmp != null) {
             bmp.recycle();
             bmp = null;
-            if (DEBUG) Log.i("Utils", ">>> recycleBitmap() / recycled bmp...");
+            Log.i("Utils", "recycled bmp...");
           }
         }
         d.setCallback(null);
@@ -798,7 +1172,7 @@ public class Utils {
       return bmp;
     }
     else {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// Drawable is NULL...");
+      Log.e(TAG, "Drawable is NULL...");
     }
     return null;
   }
@@ -818,9 +1192,33 @@ public class Utils {
       return is;
     }
     else {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// Bitmap is NULL...");
+      Log.e(TAG, "Bitmap is NULL...");
     }
     return is;
+  }
+
+  /**
+   * 어떤 view를 사용할 수 있게 설정 하고 투명하지 않게 설정 한다.
+   *
+   * @param view 설정할 뷰
+   */
+  public static void setEnableView(View view) {
+    if (view != null) {
+      view.setEnabled(true);
+      view.setAlpha(1.0f);
+    }
+  }
+
+  /**
+   * 어떤 view를 사용 할 수없게 설정 하고, 투명하게 설정 한다.
+   *
+   * @param view 설정 할 뷰
+   */
+  public static void setDisableView(View view) {
+    if (view != null) {
+      view.setEnabled(false);
+      view.setAlpha(0.5f);
+    }
   }
 
   /**
@@ -828,9 +1226,9 @@ public class Utils {
    *
    * @param sentBitmap 원본 Bitmap 이미지
    * @param radius     blur radius value.
-   * @return Blur효과가 적용된 Bitmap 객체.
+   * @return blur효과가 적용된 bitmap 객체.
    */
-  public static Bitmap getBlurImage(Bitmap sentBitmap, int radius) {
+  public static Bitmap getBlurImage(Bitmap sentBitmap, @IntRange(from = 1) int radius) {
     // Stack Blur v1.0 from
     // http://www.quasimondo.com/StackBlurForCanvas/StackBlurDemo.html
     //
@@ -900,6 +1298,10 @@ public class Utils {
     int routsum, goutsum, boutsum;
     int rinsum, ginsum, binsum;
 
+    /*
+    if (startY >= 0 && startY < h) {
+      y = startY;
+    } */
     for (y = 0; y < h; y++) {
       rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
       for (i = -radius; i <= radius; i++) {
@@ -974,6 +1376,7 @@ public class Utils {
       }
       yw += w;
     }
+
     for (x = 0; x < w; x++) {
       rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
       yp = -radius * w;
@@ -1065,9 +1468,9 @@ public class Utils {
    * @param bmp 비트맵 이미지
    * @return byte array.
    */
-  public static byte[] getBytesFromBitmap(Bitmap bmp) {
+  public static byte[] getBytesFromBitmap(@NonNull Bitmap bmp) {
     ByteArrayOutputStream os = new ByteArrayOutputStream();
-    bmp.compress(Bitmap.CompressFormat.PNG, 100, os);
+    bmp.compress(Bitmap.CompressFormat.JPEG, 100, os);
     return os.toByteArray();
   }
 
@@ -1080,7 +1483,7 @@ public class Utils {
    * @param blurRadius    blur 가 적용될 value.
    * @return Blur및 리사이징 된 Bitmap이미지.
    */
-  public static Bitmap getBlurImg_FastBlur_withRisizing(Context context, int imgResId, int maxResolution, int blurRadius) {
+  public static Bitmap getBlurImg_FastBlur_withRisizing(@NonNull Context context, @DrawableRes int imgResId, int maxResolution, int blurRadius) {
     Bitmap bmp = BitmapFactory.decodeResource(context.getResources(), imgResId);
     if (bmp != null) {
       Bitmap bmpResized = getResizeImg(bmp, maxResolution);
@@ -1097,7 +1500,7 @@ public class Utils {
    * @param radius   흐림의 정도 값.
    * @return Blur적용된 Bitmap 이미지.
    */
-  public static Bitmap getBlurImg_FastBlur(Context context, int imgResId, int radius) {
+  public static Bitmap getBlurImg_FastBlur(@NonNull Context context, @DrawableRes int imgResId, int radius) {
     Bitmap bmp = BitmapFactory.decodeResource(context.getResources(), imgResId);
     return getBlurImage(bmp, radius);
   }
@@ -1112,7 +1515,6 @@ public class Utils {
     if (view == null) return null;
     Bitmap bmp = null;
     view.setDrawingCacheEnabled(true);
-    ;
     bmp = view.getDrawingCache();
     return bmp;
   }
@@ -1140,7 +1542,7 @@ public class Utils {
    * @param context Context
    * @return Point object.
    */
-  public static Point getDeviceSize(Context context) {
+  public static Point getDeviceSize(@NonNull Context context) {
     WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
     Display display = wm.getDefaultDisplay();
     Point size = new Point();
@@ -1180,7 +1582,7 @@ public class Utils {
    * @param context Context
    * @return device size Point object.
    */
-  public static Point getDisplaySize(Context context) {
+  public static Point getDisplaySize(@NonNull Context context) {
     DisplayMetrics metrics = context.getResources()
                                     .getDisplayMetrics();
 
@@ -1238,12 +1640,51 @@ public class Utils {
   }
 
   /**
+   * 0.0f 에서 duration동안 1.0f로 증가 하는 ValueAnimator 를 만든다.
+   *
+   * @param duration       animation duration.
+   * @param updateListener value animation이 진행 되는 동안의 해야 할 작업을 구현한 listner 인스턴스.
+   * @return ValueAnimator
+   * @see ValueAnimator
+   */
+  public static ValueAnimator createDefaultIntValueAnimator(
+      int duration,
+      ValueAnimator.AnimatorUpdateListener updateListener,
+      int start, int end
+  ) {
+    return createIntValueAnimator(duration, updateListener, null, start, end);
+  }
+
+  /**
+   * value(integer)값에 의해 start value부터 end value까지 duration동안 증가 혹은 감소하는 ValueAnimator를
+   * 만든다.
+   * return 받은 ValueAnimator객체의 start()메소드를 이용하여 시작 한다.
+   *
+   * @param duration         animation duration.
+   * @param updateListener   value animation이 진행 되는 동안의 해야 할 작업을 구현한 listener 인스턴스.
+   * @param animationAdapter value animation의 상황에 따라 불리어지는 콜백을 구현한 listener 인스턴스.
+   * @param values           start value... end value.
+   * @return ValueAnimator
+   * @see ValueAnimator
+   */
+  public static ValueAnimator createIntValueAnimator(int duration,
+                                                     ValueAnimator.AnimatorUpdateListener updateListener,
+                                                     AnimatorListenerAdapter animationAdapter,
+                                                     int... values) {
+    ValueAnimator valueAnimator = ValueAnimator.ofInt(values);
+    valueAnimator.setDuration(duration);
+    if (updateListener != null) valueAnimator.addUpdateListener(updateListener);
+    if (animationAdapter != null) valueAnimator.addListener(animationAdapter);
+    return valueAnimator;
+  }
+
+  /**
    * 해상도에 따른 비율 배수를 얻는다.
    *
    * @param context Context.
    * @return Density multiplier value.
    */
-  public static float getDensityValue(Context context) {
+  public static float getDensityValue(@NonNull Context context) {
     return context.getResources()
                   .getDisplayMetrics().density;
   }
@@ -1255,7 +1696,7 @@ public class Utils {
    * @param targetViewResId 배경을 설정할 View의 resource id.
    * @param bgResId         타일 배경으로 설정될 Drawable의 resource id.
    */
-  public static void setTileBackgroundToView(Context context, int targetViewResId, int bgResId) {
+  public static void setTileBackgroundToView(@NonNull Context context, @IdRes int targetViewResId, @DrawableRes int bgResId) {
     try {
       Bitmap bmp = BitmapFactory.decodeResource(context.getResources(), bgResId);
       BitmapDrawable bitmapDrawable = new BitmapDrawable(context.getResources(), bmp);
@@ -1270,7 +1711,7 @@ public class Utils {
         }
       }
     } catch (Exception e) {
-      if (DEBUG) Log.e(TAG, "//// ERROR //// " + e.getMessage());
+      Log.e(TAG, e.getMessage());
     }
   }
 
@@ -1282,7 +1723,7 @@ public class Utils {
    * @param directoryName 체크 혹은 새로 만들 폴더의 이름.
    * @return File instance or Null
    */
-  public static File getStorageDirectory(Context context, String directoryName) {
+  public static File getStorageDirectory(@NonNull Context context, String directoryName) {
     if (directoryName != null) {
       File f = null;
       String state = Environment.getExternalStorageState();
@@ -1305,7 +1746,7 @@ public class Utils {
    * @param fileName File의 이름
    * @return File instance or null
    */
-  public static File getFile(Context context, String fileName) {
+  public static File getFile(@NonNull Context context, @NonNull String fileName) {
     File dir = getStorageDirectory(context, null);
     if (dir != null) {
       File f = new File(dir, fileName);
@@ -1330,7 +1771,7 @@ public class Utils {
    * @param views   포커싱 된 뷰들
    */
   public static void hideSoftKeyboard(Context context, View... views) {
-    if (views == null) return;
+    if (views == null || context == null) return;
     InputMethodManager imm = (InputMethodManager) context.getSystemService(Context.INPUT_METHOD_SERVICE);
     for (View currentView : views) {
       if (currentView == null) continue;
@@ -1345,11 +1786,736 @@ public class Utils {
    * @param context Context
    * @param view    포커스받고 입력 받을 Input View.
    */
-  public static void showSoftKeyboard(Context context, View view) {
+  public static void showSoftKeyboard(@NonNull Context context, View view) {
     if (view == null) return;
     InputMethodManager imm = (InputMethodManager) context.getSystemService(Context.INPUT_METHOD_SERVICE);
     view.requestFocus();
     imm.showSoftInput(view, 0);
+  }
+
+  /**
+   * 디바이스의 IP 주소를 얻는다.
+   *
+   * @return IP 주소 문자열.
+   */
+  public static String getLocalIPAddress_IPv6() {
+    try {
+      //Enumerate all the network interfaces
+      for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
+           en.hasMoreElements(); ) {
+        NetworkInterface intf = en.nextElement();
+        // Make a loop on the number of IP addresses related to each Network Interface
+        for (Enumeration<InetAddress> enumIpAddr = intf.getInetAddresses();
+             enumIpAddr.hasMoreElements(); ) {
+          InetAddress inetAddress = enumIpAddr.nextElement();
+          //Check if the IP address is not a loopback address, in that case it is
+          //the IP address of your mobile device
+          if (!inetAddress.isLoopbackAddress()) {
+            return inetAddress.getHostAddress();
+          }
+        }
+      }
+    } catch (SocketException e) {
+      e.printStackTrace();
+    }
+    return "";
+  }
+
+  /**
+   * 디바이스의 IP 주소를 얻는다.
+   *
+   * @return IP 주소 문자열.
+   */
+  public static String getLocalIPAddress_IPv4() {
+    try {
+      for (Enumeration en = NetworkInterface.getNetworkInterfaces(); en.hasMoreElements(); ) {
+        NetworkInterface intf = (NetworkInterface) en.nextElement();
+        for (Enumeration enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements(); ) {
+          InetAddress inetAddress = (InetAddress) enumIpAddr.nextElement();
+          if (!inetAddress.isLoopbackAddress() && inetAddress instanceof Inet4Address) {
+            String ipAddress = inetAddress.getHostAddress()
+                                          .toString();
+            //            Log.d("' ~'", "IP address = " + ipAddress);
+            return ipAddress;
+          }
+        }
+      }
+    } catch (SocketException ex) {
+      Log.e("Socket exception", ex.toString());
+    }
+    return "";
+  }
+
+  /**
+   * 비트맵 이미지 원본 src를 maxWidth, maxHeight를 감안하여 ratio를 유지한체 리사이징 한다.
+   *
+   * @param src      원본 비트맵 이미지
+   * @param maxValue 원하는 너비
+   * @return 리사이징된 비트맵 src 혹은 원본 src.
+   */
+  public static Bitmap createScaledBitmap(Bitmap src, int maxValue) {
+    if (src != null) {
+      Log.d(TAG, "// IMGFILE // createScaledBitmap // before resized Width = " + src.getWidth() + ", Height = " + src.getHeight());
+      Point p = createScaledBitmapSize(src, maxValue);
+      if (p != null) {
+        Log.d(TAG, "// IMGFILE // createScaledBitmap // resized Width = " + p.x + ", Height = " + p.y);
+        src = Bitmap.createScaledBitmap(src, p.x, p.y, true);
+      }
+      return src;
+    }
+    return src;
+  }
+
+  /**
+   * get Aspaect ratio image resize point
+   *
+   * @param src      원본 비트맵 이미지
+   * @param maxValue 원하는 값
+   * @return 리사이징된 비트맵의 width, height가 설정된 Point객체 혹은 null
+   */
+  public static Point createScaledBitmapSize(Bitmap src, int maxValue) {
+    Point p = null;
+    if (src != null) {
+      if (maxValue > 0) {
+        int width = src.getWidth();
+        int newWidth = width;
+        int height = src.getHeight();
+        int newHeight = height;
+        float ratio = 0.0f;
+
+        if (width > height) {
+          if (maxValue < width) {
+            ratio = maxValue / (float) width;
+            newHeight = (int) (height * ratio);
+            newWidth = maxValue;
+          }
+        }
+        else {
+          if (maxValue < height) {
+            ratio = maxValue / (float) height;
+            newWidth = (int) (width * ratio);
+            newHeight = maxValue;
+          }
+        }
+        p = new Point(newWidth, newHeight);
+      }
+    }
+    return p;
+  }
+
+  /**
+   * 사진 파일을 저장 한다.
+   *
+   * @param context Context instance.
+   * @param bitmap  저장할 비트맵 이미지
+   * @return 이미지를 성공적으로 저장했는지에 대한 여부.
+   */
+  public static boolean savePhoto(Context context, Bitmap bitmap) {
+    boolean imageSaved = false;
+
+    // 외부저장소에 쓰기가 가능 한지 체크
+    if (!isExternalStorageWritable()) {
+      Log.e(TAG, "External storage is not available for write.");
+      return imageSaved;
+    }
+
+    if (context != null && bitmap != null && !bitmap.isRecycled()) {
+      // resize bitmap.
+      bitmap = createScaledBitmap(bitmap, 720);
+
+      // 디렉터리 생성 및 체크
+      File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES) + "/VIKL/");
+      if (!dir.mkdir()) {
+        Log.w(TAG, dir.getName() + " is not created. ");
+      }
+      if (dir.exists()) {
+        Log.w(TAG, dir.getName() + " is exists. ");
+      }
+
+      String fileName = "VIKL_IMG_" + (new SimpleDateFormat("yyyyMMddHHmmss", Locale.getDefault()))
+          .format(Calendar.getInstance()
+                          .getTime());
+      FileOutputStream fos = null;
+      File imageFile = new File(dir, fileName + ".jpg");
+
+      try {
+        fos = new FileOutputStream(imageFile);
+        imageSaved = bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos);
+
+        fos.flush();
+        fos.close();
+
+      } catch (Exception e) {
+        Log.e(TAG, e.getMessage());
+      }
+
+      if (imageSaved) {
+        ContentValues values = new ContentValues(3);
+        values.put(MediaStore.Images.Media.TITLE, fileName);
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        values.put("_data", imageFile.getAbsolutePath());
+
+        context.getContentResolver()
+               .insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+      }
+    }
+    return imageSaved;
+  }
+
+  /**
+   * 사진 파일을 저장 한다.
+   *
+   * @param context Context instance.
+   * @param bitmap  저장할 비트맵 이미지
+   * @return 이미지를 성공적으로 저장했는지에 대한 여부.
+   */
+  @Nullable
+  public static String savePhotoCache(@NonNull Context context, Bitmap bitmap, int maxValue, boolean isEnableResize) {
+    boolean imageSaved = false;
+
+    File imageFile = null;
+
+    if (bitmap != null) {
+      // resize bitmap.
+      if (isEnableResize) {
+        // resize Bitmap
+        if (maxValue > 0) {
+          bitmap = createScaledBitmap(bitmap, maxValue);
+        }
+      }
+
+      // 디렉터리 생성 및 체크
+      FileOutputStream fos = null;
+      imageFile = new File(context.getCacheDir(), "IMG_CROPPED_" + String.valueOf(System.currentTimeMillis()) + ".jpg");
+
+      try {
+        fos = new FileOutputStream(imageFile);
+        imageSaved = bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos);
+
+        fos.flush();
+        fos.close();
+
+      } catch (Exception e) {
+        Log.e(TAG, e.getMessage());
+      }
+    }
+    return imageSaved ? imageFile.getAbsolutePath() : null;
+  }
+
+  /**
+   * 사진 파일을 저장 한다.
+   *
+   * @param context       Context instance.
+   * @param imageFilePath photo image cache file path.
+   */
+  public static void savePhoto(Context context, String imageFilePath) {
+    if (imageFilePath != null && context != null) {
+      Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+      File f = new File(imageFilePath);
+      Uri contentUri = Uri.fromFile(f);
+      mediaScanIntent.setData(contentUri);
+      context.sendBroadcast(mediaScanIntent);
+    }
+  }
+
+  /**
+   * 외부저장소가 저장(Write) 가능 한 상태인지 여부를 확인한다.
+   *
+   * @return true 일 경우 저장가능.
+   */
+  public static boolean isExternalStorageWritable() {
+    String state = Environment.getExternalStorageState();
+    return Environment.MEDIA_MOUNTED.equals(state);
+  }
+
+  /**
+   * Map(Key, Value pair set)으로 구성된 Request parameter 집합체를 Request post body에 실을 수
+   * 있게 String 으로 만들어 준다.
+   *
+   * @param requestParams Map으로 구성된 Request parameters.
+   * @return 만들어진 query String.
+   */
+  public static String createRequestQuery(@NonNull Map<String, String> requestParams) {
+    StringBuilder sb = new StringBuilder();
+    for (HashMap.Entry<String, String> e : requestParams.entrySet()) {
+      if (sb.length() > 0) {
+        sb.append('&');
+      }
+      try {
+        sb.append(URLEncoder.encode(e.getKey(), "UTF-8"))
+          .append('=')
+          .append(URLEncoder.encode(e.getValue(), "UTF-8"));
+      } catch (UnsupportedEncodingException uee) {
+        Log.e(TAG, uee.getMessage());
+      }
+    }
+    return sb.toString();
+  }
+
+  /**
+   * 입력받은 key와 value를 바탕으로 Request post body에 실을 String request parameter를
+   * 만들어 준다.
+   *
+   * @param key1   parameter key 1
+   * @param value1 parameter value 1
+   * @param key2   parameter key 2
+   * @param value2 parameter value 2
+   * @return query String.
+   */
+  public static String createRequestQuery(String key1, String value1, String key2, String value2) {
+    return createRequestQuery(key1, value1) + "&" + createRequestQuery(key2, value2);
+  }
+
+  /**
+   * 입력받은 key와 value를 바탕으로 Request post body에 실을 String request parameter를
+   * 만들어 준다.
+   *
+   * @param key   Parameter key
+   * @param value Parameter value
+   * @return 만들어진 query String.
+   */
+  public static String createRequestQuery(@NonNull String key, String value) {
+    return key + "=" + value;
+  }
+
+  /**
+   * 입력받은 파일 경로인 path에 파일 이름을 얻어서 반환 한다.
+   *
+   * @param path 파일 이름을 얻을 대상의 path 문자열.
+   * @return 파일 이름 문자열. 없거나 문자열이 형식에 맞지 않은 경우 empty string을 반환.
+   */
+  public static String getFileNameFromPath(String path) {
+    if (path != null && !TextUtils.isEmpty(path) && path.contains("/")) {
+      return path.substring(path.lastIndexOf("/") + 1);
+    }
+    return "";
+  }
+
+  /**
+   * 입력한 두개의 문자열이 동일한 문자열인지 검사한다
+   *
+   * @param str  검사할 문자열 1
+   * @param str2 검사할 문자열 2
+   * @return 동일한 문자열 일 경우 true, 아니면 false
+   */
+  public static boolean isSameString(String str, String str2) {
+    if (!TextUtils.isEmpty(str) && !TextUtils.isEmpty(str2)) {
+      return str.equals(str2);
+    }
+    return false;
+  }
+
+  /**
+   * str을 URLDecode 하고 공백문자를 일괄적으로 바꿔 준다.
+   *
+   * @param str 원본 문자열
+   * @return URLDecode로 decode 한 문자열
+   */
+  public static String urlDecode(String str) {
+    String buf = str;
+    try {
+      if (!TextUtils.isEmpty(str)) {
+        Log.d(TAG, "urlDecode() // BEFORE // " + str);
+
+        buf = URLDecoder.decode(str, ConstantParams.DEFAULT_CHAR_SET);
+        buf = buf.replaceAll("\\+", "%20");   // to space character
+        buf = buf.replaceAll("%", "\\\\%");
+
+        Log.d(TAG, "urlDecode() // AFTER // \n" + buf);
+      }
+    } catch (UnsupportedEncodingException uee) {
+      Log.e(TAG, uee.getMessage());
+    }
+    return buf;
+  }
+
+  /**
+   * str을 URLEncode 한다
+   *
+   * @param str 원본 문자열
+   * @return URNEncode로 encode 한 문자열
+   */
+  public static String urlEncode(String str) {
+    String buf = str;
+    try {
+      if (!TextUtils.isEmpty(str)) {
+        buf = URLEncoder.encode(str, ConstantParams.DEFAULT_CHAR_SET);
+        //buf = buf.replaceAll("%", "%25");
+      }
+    } catch (UnsupportedEncodingException uee) {
+      Log.e(TAG, uee.getMessage());
+    }
+    return buf;
+  }
+
+  /**
+   * 레이아웃에서 EditText를 상속한 뷰를 제외한 모든 뷰에 키보드를 감추는 기능의 터치 이벤트를 넣는다.
+   *
+   * @param context Context instance
+   * @param v       parent view group
+   */
+  public static void setOnHideKeyboardTouchUI(@NonNull final Context context, View v) {
+    if (v != null) {
+      if (!(v instanceof EditText)) {
+        v.setOnTouchListener(
+            new View.OnTouchListener() {
+              @Override
+              public boolean onTouch(View et, MotionEvent event) {
+                hideSoftKeyboard(context, et);
+                return false;
+              }
+            }
+        );
+      }
+      if (v instanceof ViewGroup) {
+        for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) {
+          View childView = ((ViewGroup) v).getChildAt(i);
+          setOnHideKeyboardTouchUI(context, childView);
+        }
+      }
+    }
+  }
+
+  /**
+   * EditText에서 현재 커서의 위치를 EditText 텍스트 상의 Line number를 반환 한다.
+   *
+   * @param et EditText instance
+   * @return line integer number
+   */
+  public static int getCurrentCursorLineOfEditText(EditText et) {
+    if (et != null) {
+      final int selectionStart = Selection.getSelectionStart(et.getText());
+      Layout layout = et.getLayout();
+      if (!(selectionStart == -1)) {
+        return layout.getLineForOffset(selectionStart);
+      }
+    }
+    return 0;
+  }
+
+  public static File getOutputMediaFile(int type) {
+    // To be safe, you should check that the SDCard is mounted
+    // using Environment.getExternalStorageState() before doing this.
+
+    File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
+        Environment.DIRECTORY_PICTURES), "vikl");
+    // This location works best if you want the created images to be shared
+    // between applications and persist after your app has been uninstalled.
+
+    // Create the storage directory if it does not exist
+    if (!mediaStorageDir.exists()) {
+      if (!mediaStorageDir.mkdirs()) {
+        Log.w("TEMPORARY_FILE", "failed to create directory");
+        return null;
+      }
+    }
+
+    // Create a media file name
+    String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
+    File mediaFile;
+    if (type == ConstantParams.MEDIA_TYPE_IMAGE) {
+      mediaFile = new File(mediaStorageDir.getPath() + File.separator + "IMG_" + timeStamp + ".jpg");
+    }
+    else if (type == ConstantParams.MEDIA_TYPE_VIDEO) {
+      mediaFile = new File(mediaStorageDir.getPath() + File.separator + "VID_" + timeStamp + ".mp4");
+    }
+    else {
+      return null;
+    }
+
+    return mediaFile;
+  }
+
+  /**
+   * Uri로부터 file path를 String형태로 얻는다.
+   *
+   * @param context Context instance
+   * @param uri     Uri object
+   * @return String path
+   */
+  public static String getPathFromURI(Context context, Uri uri) {
+    String path = null;
+    if (context != null) {
+      if (uri != null) {
+        Cursor cursor = context.getContentResolver().query(uri, null, null, null, null);
+        if (cursor != null) {
+          cursor.moveToNext();
+          path = cursor.getString(cursor.getColumnIndex("_data"));
+          cursor.close();
+        }
+        else {
+          Log.e(TAG, "Cursor is Null.. ");
+        }
+      }
+      else {
+        Log.e(TAG, "Uri is Null..");
+      }
+    }
+    else {
+      Log.e(TAG, "Context is Null..");
+    }
+    return path;
+  }
+
+  public static Bitmap getImageExifOrientation(Bitmap source, String imageFilePath) {
+    if (source != null && !TextUtils.isEmpty(imageFilePath)) {
+      // Read EXIF Data
+      ExifInterface exif = null;
+      try {
+        exif = new ExifInterface(imageFilePath);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+
+      if (exif != null) {
+        String orientString = exif.getAttribute(ExifInterface.TAG_ORIENTATION);
+        Log.d(TAG, "// EXIF-interface // orientString = " + orientString);
+        int orientation = orientString != null ? Integer.parseInt(orientString) : ExifInterface.ORIENTATION_NORMAL;
+        int rotationAngle = 0;
+        if (orientation == ExifInterface.ORIENTATION_ROTATE_90) rotationAngle = 90;
+        if (orientation == ExifInterface.ORIENTATION_ROTATE_180) rotationAngle = 180;
+        if (orientation == ExifInterface.ORIENTATION_ROTATE_270) rotationAngle = 270;
+
+        // Rotate Bitmap
+        Matrix matrix = new Matrix();
+        matrix.setRotate(rotationAngle);
+
+        // Return result
+        return Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 파일 하나를 삭제 한다.
+   *
+   * @param file 삭제할 파일의 경로 혹은 파일 객체
+   * @param <T>  String or File instance
+   * @return true일 경우 파일 삭제가 성공적으로 수행 됨.
+   */
+  public static <T> boolean fileDelete(T file) {
+    if (file != null) {
+      File targetFile = null;
+      if (file instanceof String) {
+        targetFile = new File((String) file);
+      }
+      else if (file instanceof File) {
+        targetFile = (File) file;
+      }
+      else {
+        Log.w(TAG, "File이나 String파일 절대 경로만 가능 합니다.");
+        return false;
+      }
+      return targetFile.delete();
+    }
+    return false;
+  }
+
+  /**
+   * 파일 하나를 이동 한다. AsyncTask등에 태워서 사용 할 것
+   *
+   * @param fromPath 이동할 파일의 절대 경로
+   * @param target   이동할 경로 혹은 파일 객체
+   * @param <T>      String or File instance
+   * @return true일 경우 이동이 성공적으로 수행 됨.
+   */
+  public static <T> boolean fileMove(String fromPath, T target) {
+    if (!TextUtils.isEmpty(fromPath)) {
+      if (target != null) {
+        File targetFile = null;
+        if (target instanceof String) {
+          targetFile = new File((String) target);
+        }
+        else if (target instanceof File) {
+          targetFile = (File) target;
+        }
+        else {
+          // Uri는 getPathFromUri()메소드를 활용 할 것.
+          Log.w(TAG, "File이나 String파일 절대 경로만 가능 합니다.");
+          return false;
+        }
+
+        File fromFile = new File(fromPath);
+        if (fromFile.exists()) {
+          if (!fromFile.renameTo(targetFile)) {
+            // File의 renameTo는 파일을 정상적으로 이동시키지 못하는 경우가 있다.
+            // 또한 이에 대한 예외조차 없다.
+            try {
+              // 기존 파일을 복사 하고 난 뒤 원본을 삭제 한다.
+              FileInputStream fis = new FileInputStream(fromFile);
+              FileOutputStream fos = new FileOutputStream(targetFile);
+
+              byte[] buf = new byte[1024];
+              int read = 0;
+              while ((read = fis.read(buf, 0, buf.length)) != -1) {
+                fos.write(buf, 0, read);
+              }
+              fis.close();
+              fos.close();
+
+              return fromFile.delete();
+
+            } catch (FileNotFoundException fnfe) {
+              Log.e(TAG, fnfe.getMessage());
+              return false;
+            } catch (IOException ioe) {
+              Log.e(TAG, ioe.getMessage());
+              return false;
+            }
+          }
+          else {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 파일 하나를 복사 한다. AsyncTask등에 태워서 처리 할 것
+   *
+   * @param from   복사할 파일의 절대 경로 혹은 객체
+   * @param target 저장할 파일의 경로 혹은 객체
+   * @param <T>    String or File instance
+   * @return true일 경우 파일 복사가 성공적으로 수행 됨.
+   */
+  public static <T> boolean fileCopy(T from, T target) {
+    if (from != null) {
+      File fromFile = null;
+      if (from instanceof String) {
+        fromFile = new File((String) from);
+      }
+      else if (from instanceof File) {
+        fromFile = (File) from;
+      }
+      else {
+        Log.w(TAG, "File이나 String파일 절대 경로만 가능 합니다.");
+        return false;
+      }
+
+      if (fromFile.exists()) {
+        File targetFile = null;
+        if (target != null) {
+          if (target instanceof String) {
+            targetFile = new File((String) target);
+          }
+          else if (target instanceof File) {
+            targetFile = (File) target;
+          }
+          else {
+            Log.w(TAG, "File이나 String파일 절대 경로만 가능 합니다.");
+            return false;
+          }
+
+          try {
+            FileInputStream fis = new FileInputStream(fromFile);
+            FileOutputStream fos = new FileOutputStream(targetFile);
+            int readCount = 0;
+            byte[] buffer = new byte[1024];
+            while ((readCount = fis.read(buffer, 0, 1024)) != -1) {
+              fos.write(buffer, 0, readCount);
+            }
+            fos.close();
+            fis.close();
+
+          } catch (IOException ioe) {
+            Log.e(TAG, ioe.getMessage());
+            return false;
+          }
+
+          if (targetFile.length() > 0) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * image uri로부터 이미지의 orientation을 얻는다.
+   */
+  public static int getExifOrientation(@NonNull String path) {
+    try {
+      ExifInterface exifInterface = new ExifInterface(path);
+      return exifInterface.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED);
+
+    } catch (IOException ioe) {
+      Log.e(TAG, ioe.getMessage());
+    }
+    return -1;
+  }
+
+  /**
+   * GPS, Network Provider를 사용 할 수 있는지 여부를 얻는다.
+   *
+   * @param context Context instance
+   * @return true일 경우 둘 중 하나 이상의 Provider를 사용 할 수 있다.
+   */
+  public static boolean isEnableLocationProviders(Context context) {
+    if (context == null) throw new NullPointerException("Context is Null..");
+    LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+    if (locationManager != null) {
+      if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+          || locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public static String getKeyHash(@NonNull Context context) {
+    String hashString = null;
+    try {
+      PackageInfo info = context.getPackageManager().getPackageInfo(
+          context.getPackageName(),
+          PackageManager.GET_SIGNATURES);
+      for (Signature signature : info.signatures) {
+        MessageDigest md = MessageDigest.getInstance("SHA");
+        md.update(signature.toByteArray());
+        hashString = Base64.encodeToString(md.digest(), Base64.DEFAULT);
+        Log.d(TAG, "KeyHash : " + hashString);
+      }
+    } catch (PackageManager.NameNotFoundException e) {
+      Log.e(TAG, e.getMessage());
+    } catch (NoSuchAlgorithmException e) {
+      Log.e(TAG, e.getMessage());
+    }
+    return hashString;
+  }
+
+  /**
+   * StatusBar의 높이를 얻는다.
+   *
+   * @param context Context instance
+   * @return pixel size of Statusbar height or 0
+   */
+  public static int getStatusBarHeight(Context context) {
+    if (context != null) {
+      int statusBarHeightResourceId = context.getResources().getIdentifier("status_bar_height", "dimen", "android");
+      if (statusBarHeightResourceId > 0) {
+        return context.getResources().getDimensionPixelSize(statusBarHeightResourceId);
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * 하단 Navigation bar의 높이를 얻는다.
+   *
+   * @param context Context instance
+   * @return pixel size of bottom of Navigation bar height or 0
+   */
+  public static int getNavigationBarHeight(Context context) {
+    if (context != null) {
+      int statusBarHeightResourceId = context.getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+      if (statusBarHeightResourceId > 0) {
+        return context.getResources().getDimensionPixelSize(statusBarHeightResourceId);
+      }
+    }
+    return 0;
   }
 
 }
